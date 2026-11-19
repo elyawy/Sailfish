@@ -53,13 +53,13 @@ class Simulator:
 
         # Pick strategy once — no branching inside simulate()
         if not self._has_indels and not self._has_subs:
-            self._strategy = self._simulate_root_only
+            self._strategy = Simulator._simulate_root_only
         elif not self._has_subs:
-            self._strategy = self._simulate_indels_only
+            self._strategy = Simulator._simulate_indels_only
         elif not self._has_indels:
-            self._strategy = self._simulate_subs_only
+            self._strategy = Simulator._simulate_subs_only
         else:
-            self._strategy = self._simulate_full
+            self._strategy = Simulator._simulate_full
 
     @property
     def _simulation_type(self) -> ALPHABET_CODES:
@@ -162,11 +162,11 @@ class Simulator:
             output_path = pathlib.Path(output_path).resolve()
             for _ in range(times):
                 replicate_path = output_path.parent / f"{output_path.stem}_replicate_{_+1}.fasta"
-                self._strategy(replicate_path)
+                self._strategy(self, replicate_path)
             return [None]  # Return a list of None for consistency with return type
         
 
-        return [self._strategy(None) for _ in range(times)]
+        return [self._strategy(self, None) for _ in range(times)]
 
     def __call__(self, output_path: Optional[pathlib.Path] = None) -> Msa:
         return self.simulate(output_path=output_path, times=1)[0]
