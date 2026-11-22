@@ -32,6 +32,7 @@ class Sequence
 private:
     SuperSeqType* _superSequence;
     bool _isSaveSequence;
+    bool _isLeafSequence = false;
 
     SequenceType _sequence;
     const Sequence* _parent;
@@ -39,8 +40,9 @@ private:
 
 public:
 
-    Sequence(SuperSeqType& superSeq, bool isSaveSeq) : 
-        _superSequence(&superSeq), _isSaveSequence(isSaveSeq) {}
+    // isLeafSeq: only pass true when leaf references should be tracked (leaves-only output mode)
+    Sequence(SuperSeqType& superSeq, bool isSaveSeq, bool isLeafSeq = false) : 
+        _superSequence(&superSeq), _isSaveSequence(isSaveSeq), _isLeafSequence(isLeafSeq) {}
 
 
     Sequence(const CompressedSequence& compressed, SuperSeqType& superSeq) 
@@ -73,7 +75,7 @@ public:
                 _rateCategories.push_back(category);
             }
 
-            if (_isSaveSequence) _superSequence->referencePosition(superSeqIterator);
+            if (_isSaveSequence) _superSequence->referencePosition(superSeqIterator, _isLeafSequence);
             _sequence.push_back(superSeqIterator);
             superSeqIterator++;
         }
@@ -131,7 +133,7 @@ public:
 
             for (size_t i = 0; i < length; i++) {
                 if (_isSaveSequence) {
-                    _superSequence->referencePosition(_parent->_sequence[position+i]);
+                    _superSequence->referencePosition(_parent->_sequence[position+i], _isLeafSequence);
                 } 
                 _sequence.push_back(_parent->_sequence[position+i]);
                 if constexpr (std::is_same_v<BlockTreeType, BlockTreeWithRates>) {
@@ -148,7 +150,7 @@ public:
             
 
             for (size_t i = 0; i < insertion; i++) {
-                superSeqIterator = _superSequence->insertItemAtPosition(superSeqIterator, randomPos, _isSaveSequence);
+                superSeqIterator = _superSequence->insertItemAtPosition(superSeqIterator, randomPos, _isSaveSequence, _isLeafSequence);
                 _sequence.push_back(superSeqIterator);
 
                 if constexpr (std::is_same_v<BlockTreeType, BlockTreeWithRates>) {

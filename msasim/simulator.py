@@ -96,7 +96,7 @@ class Simulator:
         rate_categories = msa.get_per_site_rate_categories() if self._user_rate_categories is None else self._user_rate_categories
         self._substitution_simulator.set_per_site_rate_categories(rate_categories)
         self._substitution_simulator.set_aligned_sequence_map(msa._msa)
-        substitutions = self._substitution_simulator.simulate_substitutions(msa.get_length(), self._root_seq, msa.get_root_positions_in_msa())
+        substitutions = self._substitution_simulator.simulate_substitutions(msa.get_simulation_length(), self._root_seq, msa.get_root_positions_in_msa())
         msa.fill_substitutions(substitutions)
 
     def _apply_substitutions_to_disk(self, msa: Msa, output_path: pathlib.Path) -> None:
@@ -106,7 +106,7 @@ class Simulator:
             msa.get_per_site_rate_categories() if self._user_rate_categories is None else self._user_rate_categories
         )
         self._substitution_simulator.simulate_and_write_substitutions(
-            msa.get_length(), str(output_path), self._root_seq, msa.get_root_positions_in_msa()
+            msa.get_simulation_length(), str(output_path), self._root_seq, msa.get_root_positions_in_msa()
         )
 
     def _simulate_root_only(self, output_path: Optional[pathlib.Path]) -> Optional[Msa]:
@@ -198,8 +198,12 @@ class Simulator:
     def save_root_sequence(self):
         self._simProtocol.get_sim_context().set_save_root()
 
-    def save_all_nodes_sequences(self):
-        self._simProtocol.get_sim_context().set_save_all()
+    def save_all_nodes_sequences(self, output_leaves_only: bool = False):
+        """Save all nodes. With output_leaves_only=True, internal nodes are still simulated with gap skipping
+        (faster), but only leaf rows are output and columns that are gap in all leaves are dropped."""
+        ctx = self._simProtocol.get_sim_context()
+        ctx.set_save_all()
+        ctx.set_output_leaves_only(output_leaves_only)
 
     def save_leaves_sequences(self):
         self._simProtocol.get_sim_context().set_save_leaves()

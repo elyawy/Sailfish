@@ -3,14 +3,13 @@
 #include <vector>
 #include <string>
 
-#include "../libs/pcg/pcg_random.hpp"
-// #include "../libs/splitmix/Splitmix64.h"
+#include "../libs/sfc/sfc64.h"
 #include "../libs/Phylolib/includes/gammaDistribution.h"
 #include "./IndelSimulator.h"
 #include "./SubstitutionSimulator.h"
 
 using namespace emscripten;
-using SelectedRNG = pcg64_fast;
+using SelectedRNG = SFC64;
 
 EMSCRIPTEN_BINDINGS(_Sailfish) {
 
@@ -74,7 +73,15 @@ EMSCRIPTEN_BINDINGS(_Sailfish) {
         .value("EX_EHO_EXP_EXT", modelCode::EX_EHO_EXP_EXT)
         .value("EX_EHO_EXP_HEL", modelCode::EX_EHO_EXP_HEL)
         .value("EX_EHO_EXP_OTH", modelCode::EX_EHO_EXP_OTH)
-        .value("CUSTOM",         modelCode::CUSTOM);
+        .value("WYANG",          modelCode::WYANGMODEL)
+        .value("REVERSIBLE",     modelCode::REVERSIBLE)
+        .value("NONREVERSIBLE",  modelCode::NONREVERSIBLE);
+
+    enum_<alphabetCode>("alphabetCode")
+        .value("NOSUBS",  alphabetCode::NULLCODE)
+        .value("DNA",     alphabetCode::NUCLEOTIDE)
+        .value("PROTEIN", alphabetCode::AMINOACID)
+        .value("CODON",   alphabetCode::CODON);
 
     enum_<event>("IndelEventType")
         .value("INSERTION", event::INSERTION)
@@ -167,9 +174,16 @@ EMSCRIPTEN_BINDINGS(_Sailfish) {
     // -------------------------------------------------------------------------
     class_<modelFactory>("modelFactory")
         .constructor<>()
-        .function("set_replacement_model",            &modelFactory::setReplacementModel)
-        .function("set_amino_replacement_model_file", &modelFactory::setCustomAAModelFile)
-        .function("set_model_parameters",             &modelFactory::setModelParameters)
+        // build_model: parameters / model_file_path were optional in pybind11.
+        //   build_model(alphabet, model, parameters, model_file_path)
+        //   build_model_default(alphabet, model)                 <- no parameters, no file
+        .function("build_model", optional_override([](modelFactory& self, alphabetCode alphabet, modelCode model,
+                const std::vector<MDOUBLE>& parameters, const std::string& modelFilePath) {
+            self.buildModel(alphabet, model, parameters, modelFilePath);
+        }))
+        .function("build_model_default", optional_override([](modelFactory& self, alphabetCode alphabet, modelCode model) {
+            self.buildModel(alphabet, model);
+        }))
         .function("set_site_rate_model", optional_override([](modelFactory& self,
                 const std::vector<MDOUBLE>& rates,
                 const std::vector<MDOUBLE>& stationary_probs,
@@ -181,9 +195,6 @@ EMSCRIPTEN_BINDINGS(_Sailfish) {
                 const std::vector<MDOUBLE>& stationary_probs) {
             self.setSiteRateModel(rates, stationary_probs, {});
         }))
-        .function("reset",                &modelFactory::resetFactory)
-        .function("is_model_valid",       &modelFactory::isModelValid)
-        .function("build_replacement_model", &modelFactory::buildReplacementModel)
         .function("get_rate_category_sampler", optional_override([](modelFactory& self, MDOUBLE max_path_length) {
             return self.getRateCategorySampler(max_path_length);
         }), allow_raw_pointers())
@@ -208,6 +219,7 @@ EMSCRIPTEN_BINDINGS(_Sailfish) {
         .function("set_save_leaves",     &SimulationContext<SelectedRNG>::setSaveLeaves)
         .function("set_save_root",       &SimulationContext<SelectedRNG>::setSaveRoot)
         .function("set_save_all",        &SimulationContext<SelectedRNG>::setSaveAll)
+        .function("set_output_leaves_only", &SimulationContext<SelectedRNG>::setOutputLeavesOnly)
         .function("reseed",              &SimulationContext<SelectedRNG>::reseed)
         .function("set_branch_prob_cache", &SimulationContext<SelectedRNG>::setCacheBranchProbs)
         .function("get_indel_protocol",  &SimulationContext<SelectedRNG>::getProtocol, allow_raw_pointers())
@@ -256,6 +268,7 @@ EMSCRIPTEN_BINDINGS(_Sailfish) {
     // -------------------------------------------------------------------------
     class_<MSA<SelectedRNG>>("Msa")
         .function("length",                    &MSA<SelectedRNG>::getMSAlength)
+        .function("simulation_length",         &MSA<SelectedRNG>::getSimulationLength)
         .function("num_sequences",             &MSA<SelectedRNG>::getNumberOfSequences)
         .function("fill_substitutions", optional_override([](MSA<SelectedRNG>& self, const SparseSequenceContainer& container) {
             self.fillSubstitutions(std::make_shared<const SparseSequenceContainer>(container));

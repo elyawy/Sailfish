@@ -17,6 +17,10 @@ class Msa:
     def get_length(self) -> int:
         return self._msa.length()
     
+    def get_simulation_length(self) -> int:
+        """Width in simulation coordinates (differs from get_length() only in leaves-only output mode)."""
+        return self._msa.simulation_length()
+    
     def get_root_positions_in_msa(self) -> List[int]:
         return self._msa.get_root_positions_in_msa()
     

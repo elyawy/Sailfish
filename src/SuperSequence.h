@@ -22,14 +22,16 @@ public:
     //
     //  bit 63     : COLUMN_BIT  — this site appears in the MSA
     //  bits 55-62 : RATE_BITS   — rate category (0-255)
-    //  bits  0-55 : position / absolutePosition
+    //  bit  54    : LEAF_BIT    — this site is present in at least one leaf (only tracked in leaves-only-output mode)
+    //  bits  0-53 : position / absolutePosition
 
         uint64_t _data = 0;
 
         static constexpr uint64_t COLUMN_BIT = uint64_t(1) << 63;
         static constexpr uint64_t RATE_SHIFT = 55;
         static constexpr uint64_t RATE_MASK  = uint64_t(0xFF) << 55;
-        static constexpr uint64_t POS_MASK   = ~(COLUMN_BIT | RATE_MASK);
+        static constexpr uint64_t LEAF_BIT   = uint64_t(1) << 54;
+        static constexpr uint64_t POS_MASK   = ~(COLUMN_BIT | RATE_MASK | LEAF_BIT);
 
         // Constructors
         columnContainer() = default;
@@ -50,6 +52,8 @@ public:
         // isColumn flag
         bool isColumn()           const { return _data & COLUMN_BIT; }
         void setColumn()                { _data |= COLUMN_BIT; }
+        bool isLeafRef()          const { return _data & LEAF_BIT; }
+        void setLeafRef()               { _data |= LEAF_BIT; }
 
         // Rate category (if enabled)
         uint8_t rateCategory()    const { return (_data & RATE_MASK) >> RATE_SHIFT; }
@@ -84,6 +88,7 @@ public:
         _msaSeqLength = 0;
         _leafNum = 0;
         _numSequences = simContext.getNumberOfNodesToSave();
+        _trackLeaves = simContext.getOutputLeavesOnly();
         _positionToIterator.resize(sequenceSize + 1);
 
         for (size_t i = 1; i <= sequenceSize; ++i) {
@@ -94,24 +99,42 @@ public:
         _nextSiteCounter = sequenceSize + 1;
     }
 
-    void referencePosition(typename SequenceType::iterator position) {
+    void referencePosition(typename SequenceType::iterator position, bool isLeaf = false) {
         // if (position->position == 0) return;
         if (!(*position).isColumn()) {
             (*position).setColumn();
             ++_msaSeqLength;
         }
+        if (isLeaf && !(*position).isLeafRef()) {
+            (*position).setLeafRef();
+            ++_leafMsaSeqLength;
+        }
     }
+
+    // PROTOTYPE: flat lookup position-id -> absolute MSA column (filled in setAbsolutePositions)
+    std::vector<uint32_t> _absByPos;
+    const std::vector<uint32_t>& getAbsByPos() const { return _absByPos; }
+    // Leaves-only output: position-id -> output column (columns absent from all leaves are dropped). Filled only if leaf tracking is on.
+    std::vector<uint32_t> _outByPos;
+    size_t _leafMsaSeqLength = 0;
+    bool _trackLeaves = false;
+    const std::vector<uint32_t>& getOutByPos() const { return _outByPos; }
+    size_t getOutputSequenceLength() const { return _leafMsaSeqLength; }
 
     std::vector<size_t> setAbsolutePositions() {
         if constexpr (std::is_same_v<BlockTreeType, BlockTreeWithRates>) {
             _msaRateCategories = std::make_shared<std::vector<uint8_t>>(_msaSeqLength);
         }
         std::vector<size_t> rootPositions(_originalSequenceSize, SIZE_MAX);
-        size_t i = 0;
+        _absByPos.assign(_positionToIterator.size() + 1, UINT32_MAX);
+        if (_trackLeaves) _outByPos.assign(_positionToIterator.size() + 1, UINT32_MAX);
+        size_t i = 0, kept = 0;
         for (auto &column: _sequence) {
             if (!column.isColumn()) continue;
             // column.absolutePosition = i;
             size_t currentPosition = column.position();
+            _absByPos[currentPosition] = (uint32_t)i;
+            if (_trackLeaves && column.isLeafRef()) _outByPos[currentPosition] = (uint32_t)kept++;
             column.setPosition(i);
             if (currentPosition <= _originalSequenceSize) {
                 rootPositions[currentPosition - 1] = i;
@@ -125,7 +148,7 @@ public:
         return rootPositions;
     }
 
-    typename SequenceType::iterator insertItemAtPosition(typename SequenceType::iterator position, size_t item, bool isToSave) {
+    typename SequenceType::iterator insertItemAtPosition(typename SequenceType::iterator position, size_t item, bool isToSave, bool isLeaf = false) {
         // std::cout << "INSERT POS: " << *position << " " << item << "\n";
         // printSequence();
         // columnContainer newColumn = {item, std::numeric_limits<size_t>::max(), false};
@@ -134,6 +157,7 @@ public:
         if (isToSave) {
             newColumn.setColumn();
             ++_msaSeqLength;
+            if (isLeaf) { newColumn.setLeafRef(); ++_leafMsaSeqLength; }
         }
         auto inserted_iterator = _sequence.insert(position ,newColumn);
         _positionToIterator.push_back(inserted_iterator);

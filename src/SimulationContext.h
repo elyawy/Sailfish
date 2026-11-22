@@ -54,6 +54,7 @@ public:
             }
         }
         _nodeToSaveNames.insert(_nodeToSaveNames.begin(), _tree->getRoot()->name());
+        _nodeToSaveIsLeaf.insert(_nodeToSaveIsLeaf.begin(), _tree->getRoot()->isLeaf());
         _numberOfNodesToSave++;
 
     }
@@ -63,6 +64,8 @@ public:
         _numberOfNodesToSave = 0;
         _nodesToSaveIndices.clear();
         _nodeToSaveNames.clear();
+        _nodeToSaveIsLeaf.clear();
+        _outputLeavesOnly = false; // saving leaves only already means leaves-only output
         setSaveLeavesRecursive(_tree->getRoot());
     }
 
@@ -71,7 +74,20 @@ public:
         _numberOfNodesToSave = 0;
         _nodesToSaveIndices.clear();
         _nodeToSaveNames.clear();
+        _nodeToSaveIsLeaf.clear();
         setAllNodesRecursive(_tree->getRoot());
+    }
+
+    // Save-all internally (internal nodes skip gap blocks -> faster substitutions) but output only the leaf rows.
+    // Use together with setSaveAll(); the MSA then exposes only leaf rows and drops columns that are gap in all leaves.
+    void setOutputLeavesOnly(bool v = true) { _outputLeavesOnly = v; }
+    bool getOutputLeavesOnly() const { return _outputLeavesOnly; }
+
+    // Row ids (in the saved-nodes order) of the leaves.
+    std::vector<size_t> getLeafRows() const {
+        std::vector<size_t> rows;
+        for (size_t r = 0; r < _nodeToSaveIsLeaf.size(); ++r) if (_nodeToSaveIsLeaf[r]) rows.push_back(r);
+        return rows;
     }
 
     const std::vector<bool>& getNodesToSave() const { return _nodesToSave; }
@@ -130,6 +146,7 @@ private:
         _idToSaveIndices[node->id()] = _numberOfNodesToSave;
         _nodesToSaveIndices.push_back(node->id());
         _nodeToSaveNames.push_back(node->name());
+        _nodeToSaveIsLeaf.push_back(node->isLeaf());
         _numberOfNodesToSave++;
     }
 
@@ -142,6 +159,8 @@ private:
     std::vector<size_t> _nodesToSaveIndices;
     std::vector<size_t> _idToSaveIndices; // maps from node id to index in saved nodes. if a node id is not saved, its index is SIZE_MAX
     std::vector<std::string> _nodeToSaveNames;
+    std::vector<bool> _nodeToSaveIsLeaf; // parallel to _nodesToSaveIndices
+    bool _outputLeavesOnly = false;
     size_t _numberOfNodesToSave = 0;
     SimulationProtocol* _protocol;  // Can be nullptr
     CategorySampler* _categorySampler; // Can be nullptr

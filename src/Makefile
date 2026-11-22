@@ -11,10 +11,12 @@ OUTDIR    := dist
 OUT       := $(OUTDIR)/sailfish.js
 
 SRC       := wasm_bind.cpp
+# rebuild when any simulator header changes
+HEADERS   := $(wildcard *.h)
 
 # Adjust paths if your layout differs
 PHYLOLIB  := ../libs/emPhylolib/libPhylolib.a
-INCLUDES  := -I../libs/pcg \
+INCLUDES  := -I../libs/sfc \
              -I../libs/Phylolib/includes
 
 CXXFLAGS  := -std=c++17 \
@@ -35,7 +37,7 @@ EMFLAGS   := -lembind \
 .PHONY: all
 all: $(OUTDIR) $(OUT)
 
-$(OUT): $(SRC) $(PHYLOLIB)
+$(OUT): $(SRC) $(HEADERS) $(PHYLOLIB)
 	$(EMCC) $(CXXFLAGS) -O3 $(SRC) $(PHYLOLIB) $(EMFLAGS) -o $(OUT)
 
 # ── Debug (no optimisation, DWARF source maps) ────────────────────────────────

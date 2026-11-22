@@ -36,7 +36,7 @@ public:
 	explicit SubstitutionSimulator(modelFactory& mFac, SimulationContext<RngType>& simContext): 
 		_tree(simContext.getTree()), 
 		_stochasticProcess(mFac.getStochasticProcess()), _alphabet(mFac.getAlphabet()), 
-		_nodesToSave(simContext.getNodesToSave()), _idToRowInMSA(simContext.getIdToSaveIndices()),
+		_simContextPtr(&simContext), _nodesToSave(simContext.getNodesToSave()), _idToRowInMSA(simContext.getIdToSaveIndices()),
 		_saveRates(false),
 		_rateCategorySampler(mFac.getEffectiveTransitionMatrix(), mFac.getRateCategoryProbs()),
 		_rng(simContext.getRng()),
@@ -152,6 +152,7 @@ public:
 			}
 		}
 		
+		_blockBufRow = SIZE_MAX;
 		SimSequence rootSequence = generateRootSeq(seqLength);
 
 		// if the root sequence is provided overwrite the generated root only at the positions specified in rootPositionsInMSA)
@@ -163,7 +164,8 @@ public:
 		}
 
 
-		if (_nodesToSave[_tree->getRoot()->id()]){ 
+		_outputLeavesOnly = _simContextPtr->getOutputLeavesOnly();
+		if (_nodesToSave[_tree->getRoot()->id()] && (!_outputLeavesOnly || _tree->getRoot()->isLeaf())){ 
 			saveSequence(rootSequence);
 		}
 
@@ -178,7 +180,7 @@ public:
 			childSeq.setID(node->id());
 			childSeq.setName(node->name());
 			mutateSeqAlongBranch(childSeq, node->dis2father());
-			if (_nodesToSave[node->id()]) saveSequence(childSeq);
+			if (_nodesToSave[node->id()] && (!_outputLeavesOnly || node->isLeaf())) saveSequence(childSeq);
 			mutateSeqRecuresively(childSeq, node);
 		}
 	}
@@ -236,7 +238,7 @@ public:
 
 
     void setAlignedSequenceMap(MSA<RngType>& msa) {
-        _alignedSequenceMap = msa.getSparseMSA();
+        _msaPtr = &msa; _alignedSequenceMap = nullptr; _blockBufRow = SIZE_MAX;
     }
 
 
@@ -277,8 +279,9 @@ private:
 		
 		size_t actualRowInMSA = _idToRowInMSA[nodeId];
 		// Check if this is a leaf we're saving (low memory mode)
-		if (_alignedSequenceMap != nullptr && _nodesToSave[nodeId]) {
-			const std::vector<int>& gapStructure = _alignedSequenceMap->at(actualRowInMSA);
+		if (_msaPtr != nullptr && _nodesToSave[nodeId]) {
+			if (_blockBufRow != actualRowInMSA) { _msaPtr->fillRow(actualRowInMSA, _blockBuf); _blockBufRow = actualRowInMSA; }
+			const std::vector<int>& gapStructure = _blockBuf;
 			
 			size_t site = 0;
 			_lengthOfCurrentSequence = 0;
@@ -322,9 +325,10 @@ private:
 
 		// populate the sparse sequence with only non-gap characters
 		// using the aligned sequence map if available to determine where the gaps are
-		if (_alignedSequenceMap != nullptr) {
+		if (_msaPtr != nullptr) {
 			size_t actualRowInMSA = _idToRowInMSA[currentSequence.id()];
-			const std::vector<int>& gapStructure = _alignedSequenceMap->at(actualRowInMSA);
+			if (_blockBufRow != actualRowInMSA) { _msaPtr->fillRow(actualRowInMSA, _blockBuf); _blockBufRow = actualRowInMSA; }
+			const std::vector<int>& gapStructure = _blockBuf;
 			size_t site = 0;
 			size_t writePos = 0;
 			for (int blockSize : gapStructure) {
@@ -361,8 +365,24 @@ private:
 		outputString += ">" + currentSequence.name() + "\n";
 		
 		// Get gap structure for this sequence
-		if (_alignedSequenceMap != nullptr) {
-			const std::vector<int>& gapStructure = _alignedSequenceMap->at(actualRowInMSA);
+		if (_msaPtr != nullptr && _outputLeavesOnly) {
+			// leaves-only output: characters are indexed in simulation coordinates, the layout (gaps) is in output coordinates.
+			if (_blockBufRow != actualRowInMSA) { _msaPtr->fillRow(actualRowInMSA, _blockBuf); _blockBufRow = actualRowInMSA; }
+			_msaPtr->fillRow(actualRowInMSA, _outBuf, true);
+			_nonGapChars.clear();
+			size_t site = 0;
+			for (int blockSize : _blockBuf) {
+				if (blockSize < 0) { site += (-blockSize); continue; }
+				for (int i = 0; i < blockSize; ++i) _nonGapChars += _charLookup[currentSequence[site++]];
+			}
+			size_t pos = 0;
+			for (int blockSize : _outBuf) {
+				if (blockSize < 0) outputString.append(-blockSize, '-');
+				else { outputString.append(_nonGapChars, pos, blockSize * charLen); pos += blockSize * charLen; }
+			}
+		} else if (_msaPtr != nullptr) {
+			if (_blockBufRow != actualRowInMSA) { _msaPtr->fillRow(actualRowInMSA, _blockBuf); _blockBufRow = actualRowInMSA; }
+			const std::vector<int>& gapStructure = _blockBuf;
 			size_t site = 0;
 			for (int blockSize : gapStructure) {
 				if (blockSize < 0) {
@@ -412,6 +432,8 @@ private:
 	std::shared_ptr<const stochasticProcess> _stochasticProcess;
 	const alphabet* _alphabet;
 
+	const SimulationContext<RngType>* _simContextPtr;
+	bool _outputLeavesOnly = false;
 	const std::vector<bool>& _nodesToSave;
 	const std::vector<size_t>& _idToRowInMSA;
 	bool _saveRates;
@@ -433,6 +455,10 @@ private:
 	RngType &_rng;
 	std::ofstream _outputFile;
 
+	MSA<RngType>* _msaPtr = nullptr;
+	std::vector<int> _blockBuf; size_t _blockBufRow = SIZE_MAX;
+	std::vector<int> _outBuf; // output-coordinate row (leaves-only output, disk path)
+	std::string _nonGapChars;
 	size_t _lengthOfCurrentSequence = 0;
 	bool _cacheBranchProbs;
 	std::vector<std::optional<BranchTransitionProbabilities<AlphabetSize>>> _branchCache;
