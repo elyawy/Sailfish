@@ -1,49 +1,39 @@
 #pragma once
-
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <iostream>
 #include <random>
 #include <utility>
 #include <vector>
-#include <stack>
-#include <iostream>
-#include <array>
-#include <cassert>
-
-
-template<uint8_t K>
-struct SplitRNG {
-    // Dynamically asserts any power of two (K=4, 16, 32, 64, 128, 256.)
-    static_assert((K > 0) && ((K & (K - 1)) == 0), "K must be a power of two");
-    
-    static constexpr uint8_t ctz(uint64_t v) {
-        uint8_t count = 0;
-        while ((v & 1) == 0) { v >>= 1; ++count; }
-        return count;
-    }
-
-    static constexpr uint64_t int_mask = K - 1;  
-    static constexpr uint8_t bits_for_int = ctz(K);  
-    static constexpr double divisor = 1ULL << (64 - bits_for_int);  
-    
-    uint8_t integer; // upgraded for N <= 256
-    double uniform;
-    
-    explicit SplitRNG(uint64_t rng_val) {
-        integer = static_cast<uint8_t>(rng_val & int_mask); 
-        uniform = (rng_val >> bits_for_int) / divisor;  
-    }
-};
 
 template<uint8_t N>
 class DiscreteNDistribution
 {
+    static_assert(N >= 2 && (N & (N - 1)) == 0, "N must be a power of two");
+
 private:
-    std::array<double, N> probabilities_;
-    std::array<uint8_t, N> alias_; 
+    static constexpr int ctz(unsigned v) { return (v & 1) ? 0 : 1 + ctz(v >> 1); }
+    static constexpr int kBits = ctz(N);            // low bits: bin / alias
+    static constexpr uint64_t kMask = N - 1;
+    static constexpr double kScale = static_cast<double>(1ULL << (64 - kBits));
+
+    // each word: [ threshold | alias ]
+    std::array<uint64_t, N> table_;
+
+    static uint64_t pack(double prob, int alias) {
+        // max() guards against tiny negative rounding leftovers
+        uint64_t threshold = static_cast<uint64_t>(std::max(prob, 0.0) * kScale);
+        return (threshold << kBits) | static_cast<uint64_t>(alias);
+    }
+
+    // full bin: maximum threshold, alias = itself
+    static uint64_t packFull(int i) {
+        return (~0ULL << kBits) | static_cast<uint64_t>(i);
+    }
 
 public:
-    DiscreteNDistribution<N>(const std::array<double, N> &probabilities, double normalizingFactor=1.0) {
-        assert(probabilities.size() == N);
-
+    DiscreteNDistribution(const std::array<double, N> &probabilities, double normalizingFactor=1.0) {
         std::pair<int, double> small_buf[N];
         std::pair<int, double> large_buf[N];
         int small_top = 0, large_top = 0;
@@ -61,8 +51,7 @@ public:
             auto s = small_buf[--small_top];
             auto l = large_buf[--large_top];
 
-            probabilities_[s.first] = s.second;
-            alias_[s.first] = static_cast<uint8_t>(l.first);
+            table_[s.first] = pack(s.second, l.first);
 
             l.second = (l.second + s.second) - 1.0;
             if (l.second < 1.0) {
@@ -73,53 +62,43 @@ public:
         }
 
         while (large_top > 0) {
-            auto l = large_buf[--large_top];
-            probabilities_[l.first] = 1.0;
+            int i = large_buf[--large_top].first;
+            table_[i] = packFull(i);
         }
         while (small_top > 0) {
-            auto s = small_buf[--small_top];
-            probabilities_[s.first] = 1.0;
+            int i = small_buf[--small_top].first;
+            table_[i] = packFull(i);
         }
     }
 
     template<typename RngType = std::mt19937_64>
     int drawSample(RngType &rng) const {
-        uint64_t full64Bits = rng();
-        SplitRNG<N> split(full64Bits);
+        uint64_t v = rng();
+        uint64_t p = table_[v & kMask];
 
-        uint8_t die_roll = split.integer;  
-        double coin_flip = split.uniform;  
-        
-        int result = alias_[die_roll];
-        int keep_original = (coin_flip < probabilities_[die_roll]); 
+        // bin bits set to 1 for the comparison only, so a tie picks the alias
+        uint64_t keep = -static_cast<uint64_t>((v | kMask) < p);  // all 1s or all 0s
+        uint64_t picked = (v & keep) | (p & ~keep);
 
-        int mask = -keep_original; 
-        result = (result & ~mask) | (die_roll & mask); 
-
-        return result + 1;
+        return static_cast<int>(picked & kMask) + 1;
     }
 
-    void printTable() {
-        for(auto &i: probabilities_){
-            std::cout << i << " ";
+    double getProb(int i) const {
+        return static_cast<double>(table_[i] >> kBits) / kScale;
+    }
+
+    std::vector<std::pair<double, int>> getTable() const {
+        std::vector<std::pair<double, int>> out;
+        for (int i = 0; i < N; i++) {
+            out.emplace_back(getProb(i), static_cast<int>(table_[i] & kMask));
         }
+        return out;
+    }
+
+    void printTable() const {
+        for (auto &e : getTable()) std::cout << e.first << " ";
         std::cout << "\n";
-        for(auto &i: alias_){
-            std::cout << i << " ";
-        }
+        for (auto &e : getTable()) std::cout << e.second << " ";
         std::cout << "\n";
-    }
-
-    std::vector<std::pair<double, int>> getTable() {
-        std::vector<std::pair<double, int>> prob_alias_table;
-        for(int i=0; i < probabilities_.size(); i++){
-            std::pair<double, int> current_item (probabilities_[i], alias_[i]);
-            prob_alias_table.push_back(current_item);
-        }
-        return prob_alias_table;
-    }
-
-    double getProb(int i) {
-        return probabilities_[i];
     }
 };
